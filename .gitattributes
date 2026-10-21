@@ -1,0 +1,3 @@
+# Templates are compared byte-for-byte in tests and shipped as resource strings;
+# keep them LF on every platform.
+* text=auto eol=lf
