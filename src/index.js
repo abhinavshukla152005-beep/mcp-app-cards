@@ -15,12 +15,23 @@
 
 import { BRIDGE_JS, esc } from './browser.js';
 
+export { esc, start as startFrame } from './browser.js';
+
 /** Exact mimeType MCP Apps-style HTML resources are registered under. */
 export const RESOURCE_MIME_TYPE = 'text/html;profile=mcp-app';
 
-/** Default theme; every colour in the CSS references a `--var`, never a literal. */
+/** True when an MCP resource is an HTML UI template a host should render in a frame. */
+export function isAppResource(resource) {
+  const mimeType = resource?.mimeType ?? resource?.mime_type;
+  return typeof mimeType === 'string' && mimeType.startsWith('text/html;profile=mcp-app');
+}
+
+/** Default theme; every colour in the CSS references a `--var`, never a literal.
+ *  `bg` is an opaque colour on purpose: a transparent canvas paints white in
+ *  browsers regardless of the host's own background, which would put light
+ *  text on a white page. Hosts that want blending must theme `bg` themselves. */
 const DEFAULT_THEME = {
-  bg: 'transparent',
+  bg: '#ffffff',
   card: '#f4f6f8',
   ink: '#16202b',
   dim: '#5c6f82',
@@ -78,8 +89,12 @@ li.error::before{background:var(--error)}
 .verdict{background:var(--card);border:1px solid var(--ring);border-radius:12px;padding:12px;font-size:13px;line-height:1.45;margin-top:8px}
 `;
 
-/** Renderer for card data: {cards:[{type:'carousel'|'list'|'hero'|'note',...}]}. */
-const CARDS_RENDERER = `(d) => {
+/** Renderer for card data: {cards:[{type:'carousel'|'list'|'hero'|'note',...}]}.
+ *  Shipped unminified so `.toString()` can inline it into a generated document;
+ *  exported so it can also be unit-tested in Node without a DOM.
+ *  Only `esc` (defined alongside it in the frame) is referenced.
+ */
+export function renderCards(d) {
   const cards = (d.cards || []).map((c) => {
     if (c.type === 'carousel') {
       return '<h2>' + esc(c.title) + '</h2>'
@@ -110,13 +125,13 @@ const CARDS_RENDERER = `(d) => {
       + '</article>';
   }).join('');
   return cards || '<p class="empty">' + esc(d.emptyMessage || 'Nothing to show yet.') + '</p>';
-}`;
+}
 
 /** Renderer for timeline data: {title, trace:[{status,tool,why,error,summary}], spoken}. */
-const TIMELINE_RENDERER = `(d) => {
+export function renderTimeline(d) {
   const rows = (d.trace || []).map((s) =>
     '<li class="' + esc(s.status) + '">'
-    + '<span class="badge">' + esc(s.status) + (s.ms ? ' \\u00b7 ' + esc(String(s.ms)) + 'ms' : '') + '</span>'
+    + '<span class="badge">' + esc(s.status) + (s.ms ? ' · ' + esc(String(s.ms)) + 'ms' : '') + '</span>'
     + '<div class="tool">' + esc(s.tool) + '</div>'
     + (s.why ? '<div class="why">' + esc(s.why) + '</div>' : '')
     + (s.error ? '<div class="err">' + esc(s.error) + '</div>' : '')
@@ -128,7 +143,10 @@ const TIMELINE_RENDERER = `(d) => {
   return (rows
     ? '<h2>' + esc(d.title || 'Plan') + '</h2><ol>' + rows + '</ol>' + verdict
     : '<p class="empty">' + esc(d.emptyMessage || 'No steps yet.') + '</p>');
-}`;
+}
+
+const CARDS_RENDERER = renderCards.toString();
+const TIMELINE_RENDERER = renderTimeline.toString();
 
 const THEMABLE = Object.keys(DEFAULT_THEME);
 
@@ -144,10 +162,13 @@ function themeCss(theme) {
 function doc({ template, css, renderer, options = {} }) {
   const placeholder = esc(options.placeholder ?? 'Waiting for data from the host…');
   const padding = Number(options.padding) || 28;
+  // Lets UA chrome (the carousel scrollbar, text selection) match a dark theme.
+  const scheme = /^(light|dark|light dark)$/.test(String(options.colorScheme || ''))
+    ? `html{color-scheme:${options.colorScheme}}` : '';
   return `<!doctype html>
 <html lang="en" data-template="${template}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<style>${BASE_CSS}${themeCss(options.theme)}${css}</style></head>
+<style>${scheme}${BASE_CSS}${themeCss(options.theme)}${css}</style></head>
 <body><div class="wrap" id="root"><p class="empty">${placeholder}</p></div>
 <script>${options.prelude ?? ''}window.__mcpAppPadding=${padding};window.__mcpAppRender=${renderer};
 ${BRIDGE_JS}
@@ -156,7 +177,7 @@ ${BRIDGE_JS}
 
 /** Cards template: hero tiles, headline lists, callout notes and a
  *  keyboard-scrollable horizontal media carousel. Fully generic.
- *  @param {object} [options] { theme, placeholder, padding }
+ *  @param {object} [options] { theme, placeholder, padding, colorScheme }
  */
 export function cardsTemplate(options = {}) {
   return doc({ template: 'mcp-app-cards', css: CARDS_CSS, renderer: CARDS_RENDERER, options });
@@ -164,7 +185,7 @@ export function cardsTemplate(options = {}) {
 
 /** Timeline template: renders an ordered trace of steps with status dots and
  *  an optional spoken-summary verdict block.
- *  @param {object} [options] { theme, placeholder, padding }
+ *  @param {object} [options] { theme, placeholder, padding, colorScheme }
  */
 export function timelineTemplate(options = {}) {
   return doc({ template: 'mcp-app-timeline', css: TIMELINE_CSS, renderer: TIMELINE_RENDERER, options });

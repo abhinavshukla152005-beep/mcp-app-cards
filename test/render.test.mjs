@@ -5,15 +5,24 @@ import {
   timelineTemplate,
   createHost,
   renderToHtml,
+  renderCards,
+  renderTimeline,
+  isAppResource,
   RESOURCE_MIME_TYPE
 } from '../src/index.js';
 import { esc, start, BRIDGE_JS } from '../src/browser.js';
 
 let passed = 0;
+const failures = [];
 const test = (name, fn) => {
-  fn();
-  passed++;
-  console.log('ok - ' + name);
+  try {
+    fn();
+    passed++;
+    console.log('ok - ' + name);
+  } catch (error) {
+    failures.push(name);
+    console.log('NOT OK - ' + name + '\n  ' + String(error.message).split('\n')[0]);
+  }
 };
 
 test('both templates build into complete HTML documents', () => {
@@ -90,8 +99,147 @@ test('theme object customises CSS variables and cannot inject markup', () => {
   assert.ok(!hostile.includes('display:none'));
 });
 
+test('colorScheme is opt-in and allow-listed', () => {
+  assert.ok(cardsTemplate({ colorScheme: 'dark' }).includes('html{color-scheme:dark}'));
+  assert.ok(!cardsTemplate().includes('color-scheme:'));
+  const hostile = cardsTemplate({ colorScheme: 'dark}body{display:none}' });
+  assert.ok(!hostile.includes('color-scheme:'));
+  assert.ok(!hostile.includes('display:none'));
+});
+
+test('the default theme paints an opaque canvas', () => {
+  // A transparent --bg leaves the browser's white canvas behind light text.
+  assert.ok(cardsTemplate().includes('--bg:#ffffff'));
+  assert.ok(timelineTemplate().includes('--bg:#ffffff'));
+  const themed = cardsTemplate({ theme: { bg: '#0e1620' } });
+  assert.ok(themed.includes('--bg:#0e1620'));
+});
+
 test('renderToHtml rejects unknown kinds', () => {
   assert.throws(() => renderToHtml('nope', {}), /Unknown card kind/);
 });
 
-console.log('\n' + passed + ' tests passed');
+test('isAppResource recognises an MCP Apps template', () => {
+  assert.equal(isAppResource({ mimeType: RESOURCE_MIME_TYPE }), true);
+  assert.equal(isAppResource({ mime_type: RESOURCE_MIME_TYPE }), true);
+  assert.equal(isAppResource({ mimeType: 'text/html' }), false);
+  assert.equal(isAppResource(), false);
+});
+
+test('host options reach the generated document', () => {
+  const html = cardsTemplate({ placeholder: 'Loading & <b>stuff</b>', padding: 40 });
+  assert.ok(html.includes('window.__mcpAppPadding=40'));
+  assert.ok(html.includes('Loading &amp; &lt;b&gt;stuff&lt;/b&gt;'));
+  assert.ok(!html.includes('<b>stuff</b>'));
+});
+
+test('renderCards escapes every field of a tool payload', () => {
+  const evil = '</script><img src=x onerror=alert(1)>';
+  const out = renderCards({
+    cards: [
+      { type: 'carousel', title: evil, items: [{ title: evil, sub: evil, art: evil, price: 5, chosen: true }] },
+      { type: 'list', title: evil, items: [{ title: evil, sub: 'Amp & "quotes" <b>bold</b>' }] },
+      { type: 'note', body: evil },
+      { type: 'hero', title: evil, body: evil, meta: evil },
+    ],
+  });
+  assert.ok(!out.includes('</script>'), 'raw script terminator survived');
+  assert.ok(!out.includes('<img src=x'), 'raw injected img tag survived');
+  assert.ok(!out.includes('<b>bold</b>'), 'raw markup survived');
+  assert.ok(out.includes('&lt;/script&gt;'));
+  assert.ok(out.includes('Amp &amp; &quot;quotes&quot; &lt;b&gt;'));
+  assert.ok(out.includes('role="region"'), 'carousel should be a labelled scroll region');
+  assert.ok(out.includes('<span class="tag">selected</span>'));
+});
+
+test('renderCards and renderTimeline degrade on partial data', () => {
+  assert.ok(renderCards({}).includes('Nothing to show yet.'));
+  assert.ok(renderCards({ emptyMessage: '</script>' }).includes('&lt;/script&gt;'));
+  assert.ok(renderCards({ cards: [{ title: 'unknown type falls back' }] }).includes('class="tile"'));
+  assert.ok(renderCards({ cards: [{ type: 'note', title: 'body missing' }] }).includes('body missing'));
+  assert.ok(renderTimeline({}).includes('No steps yet.'));
+  assert.ok(renderTimeline({ trace: [] }).includes('No steps yet.'));
+});
+
+test('renderTimeline exposes status, timing and the re-plan marker', () => {
+  const out = renderTimeline({
+    title: 'run',
+    trace: [
+      { tool: 'weather_now', status: 'ok', ms: 41, why: 'raining?' },
+      { tool: 'media_search', status: 'added-by-agent', summary: 'switched to audio' },
+      { tool: 'news_briefing', status: 'skipped' },
+      { tool: 'place_order', status: 'error', error: '</script>boom' },
+    ],
+    spoken: 'here you go',
+  });
+  assert.ok(out.includes('class="added-by-agent"'));
+  assert.ok(out.includes('class="skipped"'));
+  assert.ok(out.includes('41ms'));
+  assert.ok(out.includes('switched to audio'));
+  assert.ok(out.includes('class="verdict"'));
+  assert.ok(!out.includes('</script>boom'));
+});
+
+/** createHost touches `window`, so drive it with minimal fakes. */
+function fakeHostRuntime() {
+  const bus = new EventTarget();
+  const sent = [];
+  globalThis.window = {
+    addEventListener: (type, fn) => bus.addEventListener(type, fn),
+    removeEventListener: (type, fn) => bus.removeEventListener(type, fn),
+  };
+  const frame = { contentWindow: { postMessage: (message) => sent.push(message) }, style: {} };
+  const emit = (data, source = frame.contentWindow) =>
+    bus.dispatchEvent(Object.assign(new Event('message'), { data, source }));
+  return { sent, frame, emit };
+}
+
+test('createHost queues renders until the frame announces ui/ready', () => {
+  const { sent, frame, emit } = fakeHostRuntime();
+  const events = [];
+  const host = createHost(frame, { minHeight: 120 });
+  host.on((evt) => events.push(evt));
+
+  host.render({ cards: [{ type: 'note', body: 'early' }] });
+  assert.deepEqual(sent, [], 'render must wait for ui/ready');
+  assert.equal(host.isReady(), false);
+
+  emit({ jsonrpc: '2.0', method: 'ui/ready', params: { template: 'mcp-app-cards' } });
+  assert.equal(host.isReady(), true);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].method, 'ui/render');
+  assert.equal(sent[0].params.cards[0].body, 'early');
+  assert.deepEqual(events, [{ type: 'ready', template: 'mcp-app-cards' }]);
+
+  host.render({ cards: [] });
+  assert.equal(sent.length, 2);
+
+  emit({ jsonrpc: '2.0', method: 'ui/size-changed', params: { height: 400 } });
+  assert.equal(frame.style.height, '400px');
+  emit({ jsonrpc: '2.0', method: 'ui/size-changed', params: { height: 10 } });
+  assert.equal(frame.style.height, '120px', 'minHeight should floor the reported height');
+  emit({ jsonrpc: '2.0', method: 'ui/size-changed', params: { height: 'nonsense' } });
+  assert.equal(frame.style.height, '120px');
+
+  host.destroy();
+  emit({ jsonrpc: '2.0', method: 'ui/size-changed', params: { height: 700 } });
+  assert.equal(frame.style.height, '120px', 'destroy() must detach the listener');
+  delete globalThis.window;
+});
+
+test('createHost ignores traffic from other windows', () => {
+  const { sent, frame, emit } = fakeHostRuntime();
+  const host = createHost(frame);
+  const off = host.on(() => { throw new Error('must not emit for a foreign frame'); });
+  emit({ jsonrpc: '2.0', method: 'ui/ready', params: {} }, { someOtherWindow: true });
+  emit('not an object');
+  emit({ method: 'unrelated' });
+  assert.equal(host.isReady(), false);
+  assert.deepEqual(sent, []);
+  off();
+  host.destroy();
+  delete globalThis.window;
+});
+
+console.log('\n' + passed + ' tests passed' + (failures.length ? ', ' + failures.length + ' failed' : ''));
+if (failures.length) process.exitCode = 1;

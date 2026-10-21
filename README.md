@@ -43,7 +43,25 @@ for (const [uri, html] of Object.entries(templates)) {
 ```
 
 Pass `{ theme }` to recolour everything (`cardsTemplate({ theme: { accent: '#00c8ff' } })` —
-every colour in the CSS is a variable, defaults included), or `{ placeholder, padding }`.
+every colour in the CSS is a variable, defaults included), `{ placeholder, padding }` to
+change the loading text and the height the frame reports, or `{ colorScheme: 'dark' }` so UA
+chrome such as the carousel scrollbar matches a dark palette.
+
+`theme.bg` must be an opaque colour. A `transparent` background leaves the browser's default
+canvas (white) behind your text, which is how a dark palette ends up unreadable — the frame's
+own canvas is painted by the document, not by the host's `iframe` CSS.
+
+## API
+
+| Export | Where | What |
+| --- | --- | --- |
+| `cardsTemplate(options?)` | `mcp-app-cards` | cards/carousel/list/note document string |
+| `timelineTemplate(options?)` | `mcp-app-cards` | agent plan timeline document string |
+| `renderToHtml(kind, data, options?)` | `mcp-app-cards` | template with data preloaded (no host needed) |
+| `createHost(iframeEl, opts?)` | `mcp-app-cards` | host side: ready/render/size bridge |
+| `renderCards(data)` / `renderTimeline(data)` | `mcp-app-cards` | the innerHTML renderers, callable in Node |
+| `RESOURCE_MIME_TYPE` / `isAppResource(res)` | `mcp-app-cards` | the `ui://` mimeType and a detector |
+| `esc(value)` / `start(options)` | `mcp-app-cards/browser` | escape helper and the in-frame runtime |
 
 ## Host side
 
@@ -109,8 +127,14 @@ no fixed heights chosen by the server author.
 - `renderToHtml()` embeds data as JSON with every `<` rewritten as the five-character
   sequence `\u003c` (plus U+2028/2029 handling), so no payload — e.g.
   `</script><img onerror=…>` — can terminate the inline script. Covered by tests.
-- Theme values are character-sanitised before entering CSS; generated documents contain
-  **no** `http(s)://` URLs at all (asserted in the test suite).
+- Theme values are character-sanitised before entering CSS, and `colorScheme` is matched
+  against a fixed allow-list (`light`, `dark`, `light dark`) — anything else is dropped.
+- `createHost()` ignores any message whose `event.source` is not the frame it owns, so a
+  third-party iframe on the host page cannot fake a `ui/ready` or resize your frame.
+- Render the frames with `sandbox="allow-scripts"` and **without** `allow-same-origin`: the
+  bridge only needs `postMessage`, and an opaque origin keeps a template out of the host's
+  cookies, storage and DOM.
+- Generated documents contain **no** `http(s)://` URLs at all (asserted in the test suite).
 
 ## Develop
 

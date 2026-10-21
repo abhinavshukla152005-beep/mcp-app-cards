@@ -23,7 +23,13 @@ const MIME = {
 
 const server = createServer(async (req, res) => {
   const path = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
-  const target = normalize(join(ROOT, path === '/' ? join('example', 'index.html') : path.slice(1)));
+  // Send `/` to the example page so its relative `app.js` and `../src/` imports resolve.
+  if (path === '/' || path === '/example' || path === '/example/') {
+    res.writeHead(302, { location: '/example/index.html' });
+    res.end();
+    return;
+  }
+  const target = normalize(join(ROOT, path.slice(1)));
   if (target !== ROOT && !target.startsWith(ROOT + sep)) {
     res.writeHead(403).end('Forbidden');
     return;

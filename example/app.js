@@ -45,14 +45,16 @@ const TIMELINE_DATA = {
   spoken: 'Picked an awards-winning space adventure for movie night — the $0 option, since free titles covered it.'
 };
 
+// A transparent --bg leaves the browser's white canvas showing, so a dark
+// palette has to name its own background.
 const DARK_THEME = {
-  bg: 'transparent', card: '#16222f', ink: '#eaf2fa', dim: '#8fa6bd',
+  bg: '#0e1620', card: '#16222f', ink: '#eaf2fa', dim: '#8fa6bd',
   accent: '#00c8ff', ring: '#1f3550'
 };
 
 function mount(iframeId, templateFn, data) {
   const el = document.getElementById(iframeId);
-  el.srcdoc = templateFn({ theme: DARK_THEME });
+  el.srcdoc = templateFn({ theme: DARK_THEME, colorScheme: 'dark' });
   const host = createHost(el, { minHeight: 180 });
   host.on((evt) => {
     if (evt.type === 'ready') host.render(data);
