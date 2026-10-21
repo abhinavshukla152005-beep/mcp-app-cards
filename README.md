@@ -145,7 +145,7 @@ npm run example # static server → http://localhost:5173/ (cards + timeline sid
 
 ## Used by
 
-[Aura — Household Agent](https://github.com/abhinavshukla152005/aura-household-agent), an
+[Aura — Household Agent](https://github.com/abhinavshukla152005-beep/aura-household-agent), an
 Alexa+ MCP server for voice-first household routines.
 
 ## License
