@@ -16,7 +16,7 @@ build a template once, register it as a resource, drive it with `createHost()`.
 ## Install
 
 ```sh
-npm install mcp-app-cards
+npm install github:abhinavshukla152005-beep/mcp-app-cards
 ```
 
 ## Server side (~15 lines)
